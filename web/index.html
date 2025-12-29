@@ -15,14 +15,21 @@
       --gap: 12px;
     }
     * { box-sizing: border-box; }
-    body {
+    html, body {
       margin: 0;
+      padding: 0;
+      height: 100%;
+      overscroll-behavior-y: none;
+      touch-action: none;
+    }
+    body {
       padding: 24px;
       background: var(--bg);
       color: var(--text);
       font-family: var(--font);
       display: flex;
       justify-content: center;
+      overflow: hidden;
     }
     .wrapper { width: 420px; max-width: 100%; }
     header {
@@ -48,6 +55,76 @@
       align-items: center;
       margin-top: 12px;
       gap: 12px;
+    }
+    .size-toggle {
+      margin-top: 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    .size-toggle button {
+      padding: 4px 10px;
+      font-size: 16px;
+    }
+    .size-toggle span {
+      min-width: 48px;
+      text-align: center;
+    }
+    .history {
+      margin-top: 16px;
+      font-size: 13px;
+      color: #776e65;
+    }
+    .history-title {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    .history-list {
+      max-height: 180px;
+      overflow-y: auto;
+      border-radius: 4px;
+      background: rgba(238, 228, 218, 0.35);
+      padding: 6px 8px;
+    }
+    .history-item {
+      padding: 2px 0;
+      border-bottom: 1px solid rgba(187, 173, 160, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .history-item:last-child {
+      border-bottom: none;
+    }
+    .history-delete {
+      margin-left: 8px;
+      padding: 0;
+      width: 20px;
+      height: 20px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #d9534f;
+      color: #f9f6f2;
+      border-radius: 3px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease;
+    }
+    .history-item:hover .history-delete,
+    .history-item.show-delete .history-delete {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .history-delete:hover,
+    .history-delete:active,
+    .history-delete:focus {
+      background: #d9534f;
+      color: #f9f6f2;
+      outline: none;
     }
     .instructions { font-size: 14px; line-height: 1.4; margin: 0; }
     button {
@@ -76,8 +153,8 @@
       position: absolute;
       inset: var(--gap);
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      grid-template-rows: repeat(4, 1fr);
+      grid-template-columns: repeat(var(--grid-size, 4), 1fr);
+      grid-template-rows: repeat(var(--grid-size, 4), 1fr);
       gap: var(--gap);
     }
     .cell {
@@ -91,13 +168,13 @@
     }
     .tile {
       position: absolute;
-      width: calc((100% - (var(--gap) * 3)) / 4);
-      height: calc((100% - (var(--gap) * 3)) / 4);
       border-radius: 6px;
       --tx: 0px;
       --ty: 0px;
-      transform: translate(var(--tx), var(--ty));
-      transition: transform 140ms ease;
+      /* 使用 GPU 加速并支持高刷屏幕的平滑动画 */
+      will-change: transform;
+      transform: translate3d(var(--tx), var(--ty), 0);
+      transition: transform 120ms ease-out;
     }
     .tile-inner {
       width: 100%;
@@ -151,6 +228,10 @@
           <div class="label">best</div>
           <div id="best" class="value">0</div>
         </div>
+        <div class="score-box">
+          <div class="label">time</div>
+          <div id="time" class="value">0:00</div>
+        </div>
       </div>
     </header>
     <div class="top-row">
@@ -165,44 +246,104 @@
         <button id="restart">再来一局</button>
       </div>
     </div>
+    <div class="size-toggle">
+      <button id="sizePrev" aria-label="降低难度">&lt;</button>
+      <span id="sizeLabel">4×4</span>
+      <button id="sizeNext" aria-label="提高难度">&gt;</button>
+    </div>
+    <div class="history">
+      <div class="history-title">对局记录</div>
+      <div id="historyList" class="history-list">暂无对局</div>
+    </div>
   </div>
   <script>
-    const gridSize = 4;
+    let gridSize = 4;
     const boardEl = document.getElementById('board');
     const tilesEl = document.getElementById('tiles');
     const scoreEl = document.getElementById('score');
     const bestEl = document.getElementById('best');
+    const timeEl = document.getElementById('time');
     const overlay = document.getElementById('overlay');
     const overlayText = document.getElementById('overlayText');
     const newGameBtn = document.getElementById('newGame');
     const restartBtn = document.getElementById('restart');
+    const sizePrev = document.getElementById('sizePrev');
+    const sizeNext = document.getElementById('sizeNext');
+    const sizeLabel = document.getElementById('sizeLabel');
+    const historyListEl = document.getElementById('historyList');
+
+    const sizes = [4, 5, 6, 7, 8];
+    let sizeIndex = sizes.indexOf(gridSize);
 
     let grid = createEmpty();
     let score = 0;
-    let best = Number(localStorage.getItem('best-2048') || 0);
+    let bestBySize = loadBestBySize();
+    let best = bestBySize[gridSize] || 0;
     let isAnimating = false;
     let animations = [];
     let lastAdded = null;
+    let gameStartTime = null;
+    let gameTimerId = null;
+    let historyRecords = loadHistory();
+    const historySwipeState = {
+      item: null,
+      startX: 0,
+      startY: 0,
+      active: false,
+      moved: false,
+    };
 
     bestEl.textContent = best;
-    buildGrid();
-    startGame();
+    applySize();
+    renderHistory();
 
     newGameBtn.addEventListener('click', startGame);
     restartBtn.addEventListener('click', startGame);
+    sizePrev.addEventListener('click', () => {
+      if (sizeIndex <= 0) return;
+      sizeIndex -= 1;
+      applySize();
+    });
+    sizeNext.addEventListener('click', () => {
+      if (sizeIndex >= sizes.length - 1) return;
+      sizeIndex += 1;
+      applySize();
+    });
     window.addEventListener('keydown', handleKey);
-    addSwipe(boardEl, handleSwipe);
+    addSwipe(window, handleSwipe);
     window.addEventListener('resize', () => render());
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    if (historyListEl) {
+      historyListEl.addEventListener('click', handleHistoryClick);
+      setupHistorySwipe();
+    }
 
     function startGame() {
+      // 如果上一局还在进行中（还在计时），先写入一条对局记录
+      if (gameStartTime) {
+        finishTimerAndRecord();
+      }
       grid = createEmpty();
       score = 0;
       overlay.classList.add('hidden');
       lastAdded = null;
+      startTimer();
       addRandomTile();
       addRandomTile();
       updateScore(0, true);
       render();
+    }
+
+    function applySize() {
+      gridSize = sizes[sizeIndex];
+      document.documentElement.style.setProperty('--grid-size', gridSize);
+      sizeLabel.textContent = `${gridSize}×${gridSize}`;
+      // 切换棋盘时更新对应尺寸的最高分显示
+      const sizeKey = String(gridSize);
+      best = bestBySize[sizeKey] || 0;
+      bestEl.textContent = best;
+      buildGrid();
+      startGame();
     }
 
     function createEmpty() {
@@ -231,6 +372,31 @@
       grid[spot.r][spot.c] = Math.random() < 0.9 ? 2 : 4;
       lastAdded = spot;
       return true;
+    }
+
+    function startTimer() {
+      if (!timeEl) return;
+      if (gameTimerId) clearInterval(gameTimerId);
+      gameStartTime = Date.now();
+      updateTime();
+      gameTimerId = setInterval(updateTime, 1000);
+    }
+
+    function stopTimer() {
+      if (gameTimerId) {
+        clearInterval(gameTimerId);
+        gameTimerId = null;
+      }
+    }
+
+    function updateTime() {
+      if (!timeEl) return;
+      if (!gameStartTime) {
+        timeEl.textContent = '0:00';
+        return;
+      }
+      const elapsedSec = Math.floor((Date.now() - gameStartTime) / 1000);
+      timeEl.textContent = formatSeconds(elapsedSec);
     }
 
     function handleKey(e) {
@@ -320,20 +486,18 @@
     function updateScore(add, reset = false) {
       score = reset ? add : score + add;
       scoreEl.textContent = score;
-      if (score > best) {
+      const sizeKey = String(gridSize);
+      const currentBest = bestBySize[sizeKey] || 0;
+      if (score > currentBest) {
+        bestBySize[sizeKey] = score;
         best = score;
         bestEl.textContent = best;
-        localStorage.setItem('best-2048', best);
+        saveBestBySize();
       }
     }
 
     function checkEnd() {
-      if (has2048()) showOverlay('你赢了！');
-      else if (!movesAvailable()) showOverlay('游戏结束');
-    }
-
-    function has2048() {
-      return grid.some(row => row.some(v => v === 2048));
+      if (!movesAvailable()) endGame('游戏结束');
     }
 
     function movesAvailable() {
@@ -351,15 +515,17 @@
       return false;
     }
 
-    function showOverlay(text) {
+    function endGame(text) {
       overlayText.textContent = text;
       overlay.classList.remove('hidden');
+      finishTimerAndRecord();
     }
 
     function render(prevGrid = null) {
       isAnimating = true;
       tilesEl.innerHTML = '';
       const usedAnimations = [];
+      const metrics = getMetrics();
 
       for (let r = 0; r < gridSize; r++) {
         for (let c = 0; c < gridSize; c++) {
@@ -372,6 +538,8 @@
 
           const tile = document.createElement('div');
           tile.className = 'tile';
+          tile.style.width = `${metrics.size}px`;
+          tile.style.height = `${metrics.size}px`;
 
           const inner = document.createElement('div');
           inner.className = 'tile-inner';
@@ -384,7 +552,6 @@
           const endPos = translate(c, r);
           tile.style.setProperty('--tx', `${startPos.x}px`);
           tile.style.setProperty('--ty', `${startPos.y}px`);
-          tile.style.transform = `translate(${startPos.x}px, ${startPos.y}px)`;
           inner.textContent = value;
 
           const isNew = lastAdded && lastAdded.r === r && lastAdded.c === c;
@@ -396,7 +563,6 @@
           requestAnimationFrame(() => {
             tile.style.setProperty('--tx', `${endPos.x}px`);
             tile.style.setProperty('--ty', `${endPos.y}px`);
-            tile.style.transform = `translate(${endPos.x}px, ${endPos.y}px)`;
           });
         }
       }
@@ -434,13 +600,203 @@
       return map[value] || { bg: '#3c3a32', fg: '#f9f6f2' };
     }
 
-    function addSwipe(el, callback) {
+    function loadBestBySize() {
+      try {
+        const raw = localStorage.getItem('best-2048-by-size');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') return parsed;
+        }
+      } catch (e) {
+        // ignore parse errors, fall back to legacy format
+      }
+      const legacy = Number(localStorage.getItem('best-2048') || 0);
+      return legacy ? { '4': legacy } : {};
+    }
+
+    function saveBestBySize() {
+      try {
+        localStorage.setItem('best-2048-by-size', JSON.stringify(bestBySize));
+      } catch (e) {
+        // ignore quota errors
+      }
+    }
+
+    function loadHistory() {
+      try {
+        const raw = localStorage.getItem('history-2048-records');
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        // ignore parse errors
+      }
+      return [];
+    }
+
+    function saveHistory() {
+      try {
+        localStorage.setItem('history-2048-records', JSON.stringify(historyRecords));
+      } catch (e) {
+        // ignore quota errors
+      }
+    }
+
+    function finishTimerAndRecord() {
+      if (!gameStartTime) return;
+      const elapsedSec = Math.floor((Date.now() - gameStartTime) / 1000);
+      // 没有实际进行的对局不记入历史
+      if (score <= 0 && elapsedSec < 1) {
+        stopTimer();
+        gameStartTime = null;
+        return;
+      }
+      stopTimer();
+      const record = {
+        size: gridSize,
+        seconds: elapsedSec,
+        score,
+        startedAt: gameStartTime
+      };
+      historyRecords.unshift(record);
+      if (historyRecords.length > 10) historyRecords.pop();
+      saveHistory();
+      renderHistory();
+      gameStartTime = null;
+    }
+
+    function formatSeconds(totalSeconds) {
+      const m = Math.floor(totalSeconds / 60);
+      const s = totalSeconds % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    function formatStartTime(timestamp) {
+      const d = new Date(timestamp);
+      const yyyy = d.getFullYear();
+      const MM = String(d.getMonth() + 1).padStart(2, '0');
+      const DD = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+      return `${yyyy}-${MM}-${DD} ${hh}:${mm}:${ss}`;
+    }
+
+    function renderHistory() {
+      if (!historyListEl) return;
+      if (!historyRecords.length) {
+        historyListEl.textContent = '暂无对局';
+        return;
+      }
+      historyListEl.innerHTML = historyRecords
+        .map((r, index) => {
+          const startLabel = r.startedAt ? formatStartTime(r.startedAt) : '未知时间';
+          return `<div class="history-item"><span>${startLabel} · ${r.size}×${r.size} · ${formatSeconds(r.seconds)} · ${r.score}分</span><button class="history-delete" data-index="${index}" aria-label="删除这一局记录">✕</button></div>`;
+        })
+        .join('');
+    }
+
+    function handleHistoryClick(e) {
+      const btn = e.target && e.target.closest('.history-delete');
+      if (!btn) return;
+      const idx = Number(btn.getAttribute('data-index'));
+      if (Number.isNaN(idx) || idx < 0 || idx >= historyRecords.length) return;
+      historyRecords.splice(idx, 1);
+      saveHistory();
+      renderHistory();
+    }
+
+    function setupHistorySwipe() {
+      const isTouch = 'ontouchstart' in window || (navigator && navigator.maxTouchPoints > 0);
+      if (!isTouch || !historyListEl) return;
+      historyListEl.addEventListener('touchstart', handleHistoryTouchStart, { passive: true });
+      historyListEl.addEventListener('touchmove', handleHistoryTouchMove, { passive: false });
+      historyListEl.addEventListener('touchend', handleHistoryTouchEnd);
+    }
+
+    function handleHistoryTouchStart(e) {
+      if (e.touches.length !== 1) return;
+      const item = e.target.closest('.history-item');
+      if (!item) return;
+      const t = e.touches[0];
+      historySwipeState.item = item;
+      historySwipeState.startX = t.clientX;
+      historySwipeState.startY = t.clientY;
+      historySwipeState.active = true;
+      historySwipeState.moved = false;
+    }
+
+    function handleHistoryTouchMove(e) {
+      if (!historySwipeState.active || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - historySwipeState.startX;
+      const dy = t.clientY - historySwipeState.startY;
+      if (!historySwipeState.moved && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+        historySwipeState.moved = true;
+      }
+      if (!historySwipeState.moved) return;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    function handleHistoryTouchEnd(e) {
+      if (!historySwipeState.active || !historySwipeState.item) {
+        historySwipeState.active = false;
+        historySwipeState.moved = false;
+        historySwipeState.item = null;
+        return;
+      }
+      const t = e.changedTouches[0];
+      const dx = t.clientX - historySwipeState.startX;
+      const dy = t.clientY - historySwipeState.startY;
+      if (Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy)) {
+        if (dx < 0) {
+          historySwipeState.item.classList.add('show-delete');
+        } else {
+          historySwipeState.item.classList.remove('show-delete');
+        }
+      }
+      e.stopPropagation();
+      historySwipeState.active = false;
+      historySwipeState.moved = false;
+      historySwipeState.item = null;
+    }
+
+    function handleBeforeUnload() {
+      // 页面关闭或刷新时，将当前进行中的对局写入记录
+      if (!gameStartTime) return;
+      finishTimerAndRecord();
+    }
+
+    function addSwipe(target, callback) {
       let startX = 0, startY = 0;
-      el.addEventListener('touchstart', e => {
+      let isSwiping = false;
+
+      target.addEventListener('touchstart', e => {
+        if (e.touches.length !== 1) return;
         const t = e.touches[0];
-        startX = t.clientX; startY = t.clientY;
+        startX = t.clientX;
+        startY = t.clientY;
+        isSwiping = false;
       }, { passive: true });
-      el.addEventListener('touchend', e => {
+
+      target.addEventListener('touchmove', e => {
+        if (e.touches.length !== 1) return;
+        const t = e.touches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        if (!isSwiping && Math.max(absX, absY) > 10) {
+          isSwiping = true;
+        }
+        if (isSwiping) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      target.addEventListener('touchend', e => {
+        if (!isSwiping) return;
         const t = e.changedTouches[0];
         const dx = t.clientX - startX;
         const dy = t.clientY - startY;
